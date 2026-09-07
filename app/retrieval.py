@@ -59,6 +59,33 @@ class RetrievalResult:
         return self.candidates[0].gate_score if self.candidates else None
 
 
+def _check_collection_matches(embedder):
+    """Fail clearly when the collection was built by a different model.
+
+    Without this the query vector reaches Qdrant at the wrong width and the
+    failure surfaces as `ValueError: shapes (24,1024) and (256,) not aligned`
+    from inside numpy - which says nothing about the actual mistake, namely
+    that EMBED_BACKEND changed without re-running embed and index.
+    """
+    from . import db
+    from .config import QDRANT_COLLECTION
+
+    tracked = db.query("SELECT * FROM vector_collections WHERE name = %s",
+                       (QDRANT_COLLECTION,), one=True)
+    if not tracked:
+        raise RuntimeError(
+            f"collection {QDRANT_COLLECTION!r} has never been indexed. "
+            f"Run the embed and index stages on at least one document.")
+
+    if tracked["model"] != embedder.model_id:
+        raise RuntimeError(
+            f"collection {QDRANT_COLLECTION!r} holds vectors from "
+            f"{tracked['model']!r} but the configured embedder is "
+            f"{embedder.model_id!r}. Vectors from two models are not "
+            f"comparable - re-run the embed and index stages for every "
+            f"document, or switch EMBED_BACKEND/EMBED_MODEL back.")
+
+
 def retrieve(question, dense_k=None, rerank_k=None, document_id=None):
     """Embed, search, rerank. Returns a RetrievalResult, decides nothing."""
     dense_k = dense_k or RETRIEVE_DENSE_K
@@ -73,6 +100,8 @@ def retrieve(question, dense_k=None, rerank_k=None, document_id=None):
     ok, why = reranker.available()
     if not ok:
         raise RuntimeError(f"reranker unavailable: {why}")
+
+    _check_collection_matches(embedder)
 
     query_vector = embedder.embed([question])[0]
 

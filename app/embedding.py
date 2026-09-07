@@ -134,7 +134,12 @@ class SentenceTransformerEmbedder(Embedder):
     @property
     def dim(self):
         if self._dim is None:
-            self._dim = self._load().get_sentence_embedding_dimension()
+            model = self._load()
+            # renamed in sentence-transformers 6.x; the old name still works but
+            # warns, so prefer the new one when present
+            getter = (getattr(model, "get_embedding_dimension", None)
+                      or model.get_sentence_embedding_dimension)
+            self._dim = getter()
         return self._dim
 
     def embed(self, texts):
