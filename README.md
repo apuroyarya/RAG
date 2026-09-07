@@ -20,7 +20,7 @@ answers). English and Hindi follow in phases 2 and 3.
 | `ocr` | implemented — running Tesseract as a stopgap |
 | `normalize` | implemented — NFC + Bengali validity gate |
 | `chunk` | implemented — paragraph-first, offsets preserved for citations |
-| `embed` | not implemented (blocked on BGE-M3 hosting decision) |
+| `embed` | implemented — BGE-M3 self-hosted, or a fake backend for tests |
 | `index` | not implemented (blocked on hybrid-search decision) |
 
 Retrieval, abstention and the query API are not built yet.
@@ -76,7 +76,26 @@ End-to-end check of the ingestion backbone:
 ```bash
 python scripts/smoke_ingest.py "path/to/some.pdf"
 python scripts/test_chunking.py        # chunker logic, no DB or OCR needed
+python scripts/test_embedding.py       # embedding layer, fake backend
+EMBED_BACKEND=sentence_transformers python scripts/test_embedding.py   # real model
 ```
+
+### Embeddings
+
+BGE-M3 self-hosted, chosen because it is strong on Bengali *and* covers English
+and Hindi — so phases 2 and 3 need no reindex of the corpus. ~2.2GB on first
+use, cached by HuggingFace. CPU inference is slow but fine at this corpus size.
+
+```bash
+pip install --index-url https://download.pytorch.org/whl/cpu torch   # CPU-only, much smaller
+pip install sentence-transformers
+```
+
+`EMBED_BACKEND=fake` gives deterministic hashed vectors with no model download.
+It exists to test plumbing — that vectors are the right count and width, that
+indexing and retrieval wire up. **It says nothing about retrieval quality**:
+hashed vectors have no semantic structure, so any threshold tuned against them
+is noise.
 
 It asserts the things that are hard to be confident about by reading: stage
 ordering is enforced, `ocr` refuses rather than leaving silent holes, re-running

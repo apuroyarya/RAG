@@ -24,6 +24,17 @@ OCR_DPI = int(os.environ.get("OCR_DPI", "300"))
 #: Phase 1 is monolingual Bengali. Phases 2 and 3 add English then Hindi.
 DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "bn")
 
+#: Embedding backend: "sentence_transformers" (real) or "fake" (deterministic
+#: hashed vectors for plumbing tests - no semantic meaning, never tune against).
+EMBED_BACKEND = os.environ.get("EMBED_BACKEND", "sentence_transformers")
+
+#: BGE-M3 covers Bengali strongly plus English and Hindi, so phases 2-3 need no
+#: reindex. ~2.2GB on first use, cached by HuggingFace.
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-m3")
+
+#: On CPU, memory is what breaks first rather than speed.
+EMBED_BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "8"))
+
 #: Chunk sizing, in CHARACTERS not tokens. Bengali tokenizes far heavier than
 #: English, so an English token default would be wrong - but the true ratio
 #: depends on the embedding model's tokenizer, which is not chosen yet.
