@@ -171,6 +171,17 @@ python scripts/ask.py "..." --retrieval-only
 is made. Run your eval questions through it to see where answerable and
 unanswerable ones separate — that separation is what sets `ABSTAIN_THRESHOLD`.
 
+To set the threshold properly, sweep it against labelled questions:
+
+```bash
+RERANK_BACKEND=cross_encoder python scripts/sweep_threshold.py eval/questions.json
+```
+
+Read the `leaked` column first — unanswerable questions the system would answer
+anyway. See [eval/README.md](eval/README.md), which also explains why most of
+your unanswerable questions need to be *topically adjacent* to the corpus rather
+than obviously off-topic.
+
 ### How abstention works
 
 Three layers, from DESIGN.md:

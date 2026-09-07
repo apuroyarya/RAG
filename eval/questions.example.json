@@ -1,0 +1,11 @@
+[
+  {"question": "দেবযজ্ঞ কখন করা হয়?", "answerable": true},
+  {"question": "আচমন কীভাবে করতে হয়?", "answerable": true},
+  {"question": "সংকল্পপাঠ কী?", "answerable": true},
+
+  {"question": "ক্রিকেট খেলার নিয়ম কী?", "answerable": false},
+  {"question": "ভারতের রাজধানী কোথায়?", "answerable": false},
+
+  {"question": "দেবযজ্ঞের জন্য কত টাকা খরচ হয়?", "answerable": false},
+  {"question": "এই গ্রন্থের লেখক কোন সালে জন্মগ্রহণ করেন?", "answerable": false}
+]
