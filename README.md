@@ -30,14 +30,18 @@ The open decision blocking the rest is **which OCR engine** — see
 
 ## Running it
 
+Local development needs no database server - it runs on SQLite out of the box.
+
 ```bash
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt          # Linux/macOS: .venv/bin/pip
-docker compose up -d                                   # Postgres + Qdrant
-cp .env.example .env
 python -m app.db                                       # apply migrations
 uvicorn app.main:app --reload
 ```
+
+For deployment, point `DATABASE_URL` at Postgres and run the same migrations -
+the SQL is portable, with no dialect branching. `docker compose up -d` brings up
+Postgres and Qdrant if you want them locally.
 
 Then `http://localhost:8000/docs` for the API, or check wiring with:
 
@@ -50,6 +54,11 @@ End-to-end check of the ingestion backbone:
 ```bash
 python scripts/smoke_ingest.py "path/to/some.pdf"
 ```
+
+It asserts the things that are hard to be confident about by reading: stage
+ordering is enforced, `ocr` refuses rather than leaving silent holes, re-running
+a stage marks downstream stages stale, and unimplemented stages fail clearly
+instead of claiming success.
 
 ## Ingestion, by hand
 

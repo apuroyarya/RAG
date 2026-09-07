@@ -12,71 +12,75 @@
 -- 2. document_pages holds extracted text separately from any embedding. The
 --    embedding model will change at least once, and at thousands of Bengali
 --    pages that has to be a re-embed, not a re-extract.
-
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+--
+-- Deliberately portable SQL: runs on SQLite (local dev, zero dependencies) and
+-- Postgres (deployment) with no dialect branching. That costs three things,
+-- each a conscious trade:
+--   * TEXT + CHECK instead of Postgres ENUM types
+--   * TEXT holding JSON instead of JSONB - the app parses it
+--   * TEXT holding ISO-8601 UTC instead of TIMESTAMPTZ; such strings sort
+--     correctly as text, so ORDER BY still works
+-- Ids are generated in Python rather than by the database, for the same reason.
 
 CREATE TABLE documents (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename      TEXT        NOT NULL,
-    sha256        TEXT        NOT NULL UNIQUE,  -- re-uploading the same PDF is a no-op
-    storage_path  TEXT        NOT NULL,
-    byte_size     BIGINT      NOT NULL,
-    page_count    INTEGER,
-    language      TEXT        NOT NULL DEFAULT 'bn',
+    id              TEXT PRIMARY KEY,
+    filename        TEXT    NOT NULL,
+    sha256          TEXT    NOT NULL UNIQUE,   -- re-uploading the same PDF is a no-op
+    storage_path    TEXT    NOT NULL,
+    byte_size       INTEGER NOT NULL,
+    page_count      INTEGER,
+    language        TEXT    NOT NULL DEFAULT 'bn',
     -- set by normalize when pages fail the Bengali validity gate; these must be
     -- looked at by a human before the document can be indexed
-    review_required BOOLEAN   NOT NULL DEFAULT FALSE,
-    review_note   TEXT,
-    uploaded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    review_required INTEGER NOT NULL DEFAULT 0 CHECK (review_required IN (0, 1)),
+    review_note     TEXT,
+    uploaded_at     TEXT    NOT NULL
 );
 
-CREATE TYPE stage_name AS ENUM
-    ('extract', 'ocr', 'normalize', 'chunk', 'embed', 'index');
-
--- held: deliberately parked so a human can inspect before it advances.
--- stale: an upstream stage re-ran, so this result no longer describes the input.
-CREATE TYPE stage_status AS ENUM
-    ('pending', 'running', 'succeeded', 'failed', 'skipped', 'held', 'stale');
-
 CREATE TABLE stage_runs (
-    id           BIGSERIAL PRIMARY KEY,
-    document_id  UUID        NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    stage        stage_name  NOT NULL,
-    status       stage_status NOT NULL DEFAULT 'pending',
-    attempt      INTEGER     NOT NULL DEFAULT 0,
-    triggered_by TEXT        NOT NULL DEFAULT 'manual',   -- 'manual' | 'auto'
-    output_ref   TEXT,        -- artifact path on disk, when the stage writes one
-    metrics      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    document_id  TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    stage        TEXT NOT NULL CHECK (stage IN
+                     ('extract', 'ocr', 'normalize', 'chunk', 'embed', 'index')),
+    -- held:  finished, but a human must look before it advances (review gate)
+    -- stale: an upstream stage re-ran, so this result describes input that is gone
+    status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN
+                     ('pending', 'running', 'succeeded', 'failed',
+                      'skipped', 'held', 'stale')),
+    attempt      INTEGER NOT NULL DEFAULT 0,
+    triggered_by TEXT NOT NULL DEFAULT 'manual',  -- 'manual' | 'auto'
+    output_ref   TEXT,          -- artifact path on disk, when the stage writes one
+    metrics      TEXT NOT NULL DEFAULT '{}',      -- JSON
     error        TEXT,
-    started_at   TIMESTAMPTZ,
-    finished_at  TIMESTAMPTZ,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- one row per stage per document; re-running updates in place and bumps attempt
-    UNIQUE (document_id, stage)
+    started_at   TEXT,
+    finished_at  TEXT,
+    created_at   TEXT NOT NULL,
+    -- one row per stage per document; re-running updates in place, bumps attempt
+    PRIMARY KEY (document_id, stage)
 );
 
 CREATE INDEX stage_runs_claimable ON stage_runs (status, stage)
     WHERE status = 'pending';
 
 -- Page-level text with provenance. `source` records HOW the text was obtained,
--- which matters because the two paths have very different trust levels:
---   textlayer - the PDF's own text, only used where triage passed
+-- because the two paths have very different trust levels:
+--   textlayer - the PDF's own text, used only where triage passed
 --   ocr       - rendered and OCR'd, used where the text layer was untrustworthy
-CREATE TYPE page_source AS ENUM ('textlayer', 'ocr', 'needs_ocr', 'empty');
-
+--   needs_ocr - triage rejected the text layer; no text yet
+--   empty     - image-only page; OCR is the only option
 CREATE TABLE document_pages (
-    document_id  UUID        NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    page_no      INTEGER     NOT NULL,          -- 1-based
-    source       page_source NOT NULL,
-    ocr_engine   TEXT,                          -- which engine, when source='ocr'
-    raw_text     TEXT,                          -- as obtained, before normalization
-    text         TEXT,                          -- NFC-normalized, what downstream uses
+    document_id TEXT    NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    page_no     INTEGER NOT NULL,              -- 1-based
+    source      TEXT    NOT NULL CHECK (source IN
+                    ('textlayer', 'ocr', 'needs_ocr', 'empty')),
+    ocr_engine  TEXT,                          -- which engine, when source='ocr'
+    raw_text    TEXT,                          -- as obtained, before normalization
+    text        TEXT,                          -- NFC-normalized; what downstream uses
     -- triage + validity signals, so a bad page is visible without re-deriving it
-    quality      JSONB       NOT NULL DEFAULT '{}'::jsonb,
-    trustworthy  BOOLEAN,                       -- NULL until normalize has judged
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    quality     TEXT    NOT NULL DEFAULT '{}',  -- JSON
+    trustworthy INTEGER CHECK (trustworthy IN (0, 1)),  -- NULL until normalize judges
+    updated_at  TEXT    NOT NULL,
     PRIMARY KEY (document_id, page_no)
 );
 
 CREATE INDEX document_pages_untrustworthy ON document_pages (document_id)
-    WHERE trustworthy IS FALSE;
+    WHERE trustworthy = 0;

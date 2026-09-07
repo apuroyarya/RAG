@@ -10,16 +10,10 @@ rows go to 'stale' rather than staying 'succeeded'. Without this, a re-extracted
 document keeps an index built from the old text and nothing tells you.
 """
 import traceback
-from datetime import datetime, timezone
-
-from psycopg.types.json import Jsonb
 
 from .. import db
 from . import stages
-
-
-def now():
-    return datetime.now(timezone.utc)
+from ..db import now_iso, to_json
 
 
 def ensure_stage_runs(document_id):
@@ -28,11 +22,11 @@ def ensure_stage_runs(document_id):
         for stage in stages.STAGE_ORDER:
             conn.execute(
                 """
-                INSERT INTO stage_runs (document_id, stage, status)
-                VALUES (%s, %s, 'pending')
+                INSERT INTO stage_runs (document_id, stage, status, created_at)
+                VALUES (%s, %s, 'pending', %s)
                 ON CONFLICT (document_id, stage) DO NOTHING
                 """,
-                (document_id, stage),
+                (document_id, stage, now_iso()),
             )
         conn.commit()
 
@@ -71,13 +65,14 @@ def mark_downstream_stale(conn, document_id, stage):
     later = stages.STAGE_ORDER[stages.STAGE_ORDER.index(stage) + 1:]
     if not later:
         return 0
+    placeholders = ", ".join(["%s"] * len(later))
     cur = conn.execute(
-        """
+        f"""
         UPDATE stage_runs SET status = 'stale'
-        WHERE document_id = %s AND stage = ANY(%s)
+        WHERE document_id = %s AND stage IN ({placeholders})
           AND status IN ('succeeded', 'failed', 'held', 'skipped')
         """,
-        (document_id, later),
+        (document_id, *later),
     )
     return cur.rowcount
 
@@ -121,7 +116,7 @@ def run_stage(document_id, stage, triggered_by="manual", force=False):
                    finished_at = NULL, error = NULL
              WHERE document_id = %s AND stage = %s
             """,
-            (triggered_by, now(), document_id, stage),
+            (triggered_by, now_iso(), document_id, stage),
         )
         conn.commit()
 
@@ -135,7 +130,7 @@ def run_stage(document_id, stage, triggered_by="manual", force=False):
                    SET status = 'failed', finished_at = %s, error = %s
                  WHERE document_id = %s AND stage = %s
                 """,
-                (now(), traceback.format_exc(limit=8), document_id, stage),
+                (now_iso(), traceback.format_exc(limit=8), document_id, stage),
             )
             conn.commit()
         raise
@@ -148,8 +143,8 @@ def run_stage(document_id, stage, triggered_by="manual", force=False):
                    metrics = %s, error = NULL
              WHERE document_id = %s AND stage = %s
             """,
-            (result.status, now(), result.output_ref, Jsonb(result.metrics),
-             document_id, stage),
+            (result.status, now_iso(), result.output_ref,
+             to_json(result.metrics), document_id, stage),
         )
         stale = mark_downstream_stale(conn, document_id, stage)
         conn.commit()
@@ -185,7 +180,16 @@ def advance(document_id, triggered_by="auto", max_stages=None):
             break
         if max_stages is not None and len(ran) >= max_stages:
             break
-        row = run_stage(document_id, stage, triggered_by=triggered_by, force=True)
+        try:
+            row = run_stage(document_id, stage, triggered_by=triggered_by,
+                            force=True)
+        except Exception as exc:
+            # A stage failing is a normal outcome here, not an error in advancing.
+            # run_stage has already recorded 'failed' with the traceback, so a
+            # worker should stop this document and move on to the next one -
+            # not crash the loop and take every other document down with it.
+            ran.append({"stage": stage, "status": "failed", "error": str(exc)})
+            break
         ran.append({"stage": stage, "status": row["status"]})
         if row["status"] in ("held", "failed"):
             break

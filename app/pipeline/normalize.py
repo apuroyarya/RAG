@@ -15,6 +15,7 @@ Two jobs:
 import json
 
 from .. import db
+from ..db import now_iso
 from ..bengali import normalize as nfc_normalize
 from ..bengali import orthographic_report
 from ..config import VALIDITY_THRESHOLD, stage_dir
@@ -57,10 +58,10 @@ class Normalize(Stage):
                 conn.execute(
                     """
                     UPDATE document_pages
-                       SET text = %s, trustworthy = %s, updated_at = now()
+                       SET text = %s, trustworthy = %s, updated_at = %s
                      WHERE document_id = %s AND page_no = %s
                     """,
-                    (text, trustworthy, doc["id"], p["page_no"]),
+                    (text, int(trustworthy), now_iso(), doc["id"], p["page_no"]),
                 )
                 entry = {
                     "page_no": p["page_no"],
@@ -85,7 +86,7 @@ class Normalize(Stage):
                     f"(pages {bad_pages[:8]}) - held for review")
             with db.connect() as conn:
                 conn.execute(
-                    "UPDATE documents SET review_required = TRUE, review_note = %s "
+                    "UPDATE documents SET review_required = 1, review_note = %s "
                     "WHERE id = %s",
                     (note, doc["id"]),
                 )
@@ -93,7 +94,7 @@ class Normalize(Stage):
         else:
             with db.connect() as conn:
                 conn.execute(
-                    "UPDATE documents SET review_required = FALSE, review_note = NULL "
+                    "UPDATE documents SET review_required = 0, review_note = NULL "
                     "WHERE id = %s", (doc["id"],))
                 conn.commit()
 

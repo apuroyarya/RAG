@@ -15,6 +15,7 @@ from os.path import abspath, dirname
 import pymupdf
 
 from .. import db
+from ..db import now_iso
 from ..config import OCR_DPI, OCR_ENGINE, stage_dir
 from .stages import Stage, StageResult, register
 
@@ -88,10 +89,10 @@ class Ocr(Stage):
                         """
                         UPDATE document_pages
                            SET source = 'ocr', ocr_engine = %s, raw_text = %s,
-                               text = NULL, trustworthy = NULL, updated_at = now()
+                               text = NULL, trustworthy = NULL, updated_at = %s
                          WHERE document_id = %s AND page_no = %s
                         """,
-                        (OCR_ENGINE, text, doc["id"], page_no),
+                        (OCR_ENGINE, text, now_iso(), doc["id"], page_no),
                     )
                     conn.commit()
                 done.append({"page_no": page_no, "chars": len(text),

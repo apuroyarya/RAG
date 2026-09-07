@@ -13,6 +13,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import PlainTextResponse
 
 from . import db
+from .db import new_id, now_iso
 from .config import DEFAULT_LANGUAGE, OCR_ENGINE, STORAGE_DIR, document_dir
 from .pipeline import runner, stages
 
@@ -65,24 +66,26 @@ async def upload(file: UploadFile = File(...),
         return {"document": _doc_summary(existing), "created": False,
                 "note": "identical file already uploaded"}
 
-    row = db.execute(
+    doc_id = new_id()
+    db.execute(
         """
-        INSERT INTO documents (filename, sha256, storage_path, byte_size, language)
-        VALUES (%s, %s, %s, %s, %s) RETURNING *
+        INSERT INTO documents (id, filename, sha256, storage_path, byte_size,
+                               language, uploaded_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """,
-        (file.filename, sha, "", size, language),
-        returning=True,
+        (doc_id, file.filename, sha, "", size, language, now_iso()),
     )
-    dest = document_dir(row["id"]) / "source.pdf"
+    row = db.query("SELECT * FROM documents WHERE id = %s", (doc_id,), one=True)
+    dest = document_dir(doc_id) / "source.pdf"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(tmp), dest)
     db.execute("UPDATE documents SET storage_path = %s WHERE id = %s",
-               (str(dest), row["id"]))
+               (str(dest), doc_id))
     row["storage_path"] = str(dest)
 
-    runner.ensure_stage_runs(row["id"])
+    runner.ensure_stage_runs(doc_id)
     return {"document": _doc_summary(row), "created": True,
-            "next_stage": runner.next_runnable(row["id"])}
+            "next_stage": runner.next_runnable(doc_id)}
 
 
 @app.get("/documents")
@@ -202,7 +205,8 @@ def artifact(document_id: str, stage: str):
 def review_queue():
     """Documents held because pages failed the Bengali validity check."""
     rows = db.query(
-        "SELECT * FROM documents WHERE review_required ORDER BY uploaded_at DESC")
+        "SELECT * FROM documents WHERE review_required = 1 "
+        "ORDER BY uploaded_at DESC")
     return {"documents": [_doc_summary(r) for r in rows]}
 
 

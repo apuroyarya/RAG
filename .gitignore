@@ -9,3 +9,7 @@ tools/_*.png
 
 storage/
 .env
+
+rag.db
+rag.db-wal
+rag.db-shm

@@ -13,9 +13,8 @@ The `ocr` stage fills them in. Nothing here silently guesses.
 import json
 
 import pymupdf
-from psycopg.types.json import Jsonb
-
 from .. import db
+from ..db import now_iso, to_json
 from ..config import VALIDITY_THRESHOLD, stage_dir
 from ..bengali import (LEGACY_FONT_HINT, bengali_ratio, is_bengali,
                        orthographic_report)
@@ -134,7 +133,7 @@ class Extract(Stage):
                     """
                     INSERT INTO document_pages
                         (document_id, page_no, source, raw_text, quality, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, now())
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (document_id, page_no) DO UPDATE
                        SET source = EXCLUDED.source,
                            raw_text = EXCLUDED.raw_text,
@@ -142,10 +141,10 @@ class Extract(Stage):
                            text = NULL,          -- normalize must run again
                            trustworthy = NULL,
                            ocr_engine = NULL,
-                           updated_at = now()
+                           updated_at = excluded.updated_at
                     """,
                     (doc["id"], p["page_no"], p["source"], p["raw_text"],
-                     Jsonb(p["quality"])),
+                     to_json(p["quality"]), now_iso()),
                 )
             conn.commit()
 

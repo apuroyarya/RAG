@@ -1,6 +1,7 @@
-"""End-to-end check of the ingestion backbone. Needs Postgres up.
+"""End-to-end check of the ingestion backbone.
 
-    docker compose up -d
+Runs against SQLite by default, so it needs nothing installed:
+
     python -m app.db                      # apply migrations
     python scripts/smoke_ingest.py "path/to/some.pdf"
 
@@ -9,12 +10,12 @@ Exercises the parts that are hard to be confident about by reading:
   1. a document gets a full row-per-stage set, all pending
   2. stage ordering is enforced (normalize refuses to run before extract)
   3. extract writes per-page triage and its artifact
-  4. re-running extract with force marks downstream stages stale
-  5. an unimplemented stage fails as 501-shaped, not as a crash
-  6. runner.advance (auto mode) walks the same path manual triggers do
+  4. ocr refuses to run rather than leaving silent holes in the corpus
+  5. re-running extract with force marks downstream stages stale
+  6. an unimplemented stage fails clearly instead of claiming success
+  7. runner.advance (auto mode) walks the same path manual triggers do
 """
 import sys
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,6 +26,7 @@ import hashlib
 
 from app import db
 from app.config import document_dir
+from app.db import new_id, now_iso
 from app.pipeline import runner, stages
 
 PASS, FAIL = "  ok  ", " FAIL "
@@ -42,7 +44,7 @@ def main(pdf_path):
     ok, msg = db.healthcheck()
     if not ok:
         raise SystemExit(f"database not reachable: {msg}\n"
-                         f"run: docker compose up -d && python -m app.db")
+                         f"run: python -m app.db")
 
     src = Path(pdf_path).resolve()
     if not src.exists():
@@ -51,13 +53,14 @@ def main(pdf_path):
     # register the document, copying it in the way the upload endpoint does
     sha = hashlib.sha256(src.read_bytes()).hexdigest()
     db.execute("DELETE FROM documents WHERE sha256 = %s", (sha,))
-    row = db.execute(
+    doc_id = new_id()
+    db.execute(
         """
-        INSERT INTO documents (filename, sha256, storage_path, byte_size, language)
-        VALUES (%s, %s, %s, %s, 'bn') RETURNING *
+        INSERT INTO documents (id, filename, sha256, storage_path, byte_size,
+                               language, uploaded_at)
+        VALUES (%s, %s, %s, %s, %s, 'bn', %s)
         """,
-        (src.name, sha, "", src.stat().st_size), returning=True)
-    doc_id = row["id"]
+        (doc_id, src.name, sha, "", src.stat().st_size, now_iso()))
     dest = document_dir(doc_id) / "source.pdf"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(src.read_bytes())
@@ -95,8 +98,18 @@ def main(pdf_path):
           res["output_ref"] and Path(res["output_ref"]).exists(),
           res["output_ref"] or "none")
 
-    # 4. re-run marks downstream stale
-    runner.run_stage(doc_id, "ocr")           # skipped or fails; either is fine here
+    # 4. ocr either skips (text layer covered everything) or refuses (pages need
+    #    OCR but no engine is configured). Both are correct; a silent success
+    #    with holes in the corpus would not be.
+    try:
+        ocr_res = runner.run_stage(doc_id, "ocr")
+        check("ocr skipped - text layer covered every page",
+              ocr_res["status"] == "skipped", ocr_res["status"])
+    except RuntimeError as exc:
+        check("ocr refuses to run without an engine",
+              "OCR_ENGINE is not set" in str(exc), str(exc)[:70])
+
+    # 5. re-run marks downstream stale
     before = {r["stage"]: r["status"] for r in runner.stage_rows(doc_id)}
     res2 = runner.run_stage(doc_id, "extract", force=True)
     after = {r["stage"]: r["status"] for r in runner.stage_rows(doc_id)}
@@ -111,7 +124,7 @@ def main(pdf_path):
               for s in stages.STAGE_ORDER[1:]),
           f"stale={res2['downstream_marked_stale']}")
 
-    # 5. an unimplemented stage reports itself clearly
+    # 6. an unimplemented stage reports itself clearly
     try:
         runner.run_stage(doc_id, "chunk", force=True)
         check("chunk reports not-implemented", False, "it claimed success")
@@ -121,7 +134,7 @@ def main(pdf_path):
         # blocked by an earlier stage, which is also correct behaviour
         check("chunk reports not-implemented", True, f"blocked: {str(exc)[:50]}")
 
-    # 6. auto mode walks the same path
+    # 7. auto mode walks the same path
     ran = runner.advance(doc_id, max_stages=3)
     check("advance() runs without crashing", True,
           " -> ".join(f"{r['stage']}:{r['status']}" for r in ran) or "nothing runnable")

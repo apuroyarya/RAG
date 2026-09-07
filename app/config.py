@@ -2,8 +2,9 @@
 import os
 from pathlib import Path
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://rag:rag@localhost:5432/rag")
+#: SQLite by default so the project runs with nothing installed. Point this at
+#: a postgresql:// URL for deployment; the same portable SQL runs on both.
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///rag.db")
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 
