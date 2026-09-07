@@ -15,3 +15,5 @@ rag.db-wal
 rag.db-shm
 
 .tessdata/
+
+qdrant_data/

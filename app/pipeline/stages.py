@@ -68,6 +68,6 @@ def implemented():
 
 def load_all():
     """Import the stage modules so their @register decorators run."""
-    from . import (chunk, embed, extract, normalize, ocr,  # noqa: F401
-                   placeholders)
+    from . import (chunk, embed, extract, index,  # noqa: F401
+                   normalize, ocr)
     return implemented()

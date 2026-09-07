@@ -4,6 +4,7 @@ uvicorn[standard]>=0.32
 python-multipart>=0.0.12
 psycopg[binary]>=3.2
 pymupdf>=1.24
+qdrant-client>=1.12
 pillow>=10.0
 
 # Embeddings - install separately to control the torch variant:

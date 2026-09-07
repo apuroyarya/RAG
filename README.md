@@ -21,9 +21,10 @@ answers). English and Hindi follow in phases 2 and 3.
 | `normalize` | implemented — NFC + Bengali validity gate |
 | `chunk` | implemented — paragraph-first, offsets preserved for citations |
 | `embed` | implemented — BGE-M3 self-hosted, or a fake backend for tests |
-| `index` | not implemented (blocked on hybrid-search decision) |
+| `index` | implemented — Qdrant embedded, dense vectors |
 
-Retrieval, abstention and the query API are not built yet.
+All six ingestion stages are implemented. Retrieval, abstention and the query
+API are not built yet.
 
 Every page of both sample documents needs OCR — their text layers are corrupt —
 so OCR quality sets the ceiling for the whole system. Tesseract is wired up as a
@@ -77,8 +78,25 @@ End-to-end check of the ingestion backbone:
 python scripts/smoke_ingest.py "path/to/some.pdf"
 python scripts/test_chunking.py        # chunker logic, no DB or OCR needed
 python scripts/test_embedding.py       # embedding layer, fake backend
+python scripts/test_vectorstore.py     # vector store, throwaway collection
 EMBED_BACKEND=sentence_transformers python scripts/test_embedding.py   # real model
 ```
+
+### Vector store
+
+Qdrant in **embedded mode** by default — a local directory, no server, no
+Docker. Set `QDRANT_URL` to use a server instead.
+
+One caveat that will bite otherwise: embedded mode takes an **exclusive lock**
+on its directory, so only one process can hold it. The API server and a CLI
+script cannot both open it at once. That is fine for phase 1's manual triggers,
+and it is the main reason to move to a server for anything concurrent.
+
+The collection uses a *named* dense vector from the start. Qdrant cannot add a
+new named vector to an existing collection, and the design wants hybrid search
+later — so naming it now makes adding sparse a collection rebuild rather than a
+schema problem. Rebuilds are cheap: the embedding artifacts are the durable
+record, so a rebuild re-indexes without re-embedding.
 
 ### Embeddings
 

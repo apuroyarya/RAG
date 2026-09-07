@@ -6,7 +6,12 @@ from pathlib import Path
 #: a postgresql:// URL for deployment; the same portable SQL runs on both.
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///rag.db")
 
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+#: Empty means embedded mode: a local directory, no server, no Docker. Note
+#: embedded mode takes an EXCLUSIVE lock on that directory, so only one process
+#: can hold it - set QDRANT_URL to a server for anything concurrent.
+QDRANT_URL = os.environ.get("QDRANT_URL", "").strip()
+QDRANT_PATH = Path(os.environ.get("QDRANT_PATH", "qdrant_data")).resolve()
+QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "chunks")
 
 #: Where stage artifacts and uploaded PDFs live. Artifacts are files on disk
 #: referenced by path from stage_runs.output_ref, not blobs in the database -
