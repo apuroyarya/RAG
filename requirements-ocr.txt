@@ -1,0 +1,11 @@
+# Base: always needed for the probe and the benchmark harness.
+pymupdf>=1.24
+pillow>=10.0
+
+# OCR engines - all optional. Install only what you want to benchmark.
+# Each is auto-detected; missing ones are reported and skipped.
+
+# google-cloud-vision>=3.7      # needs GOOGLE_APPLICATION_CREDENTIALS
+# azure-ai-documentintelligence>=1.0  # needs AZURE_DI_ENDPOINT + AZURE_DI_KEY
+# surya-ocr>=0.6                # self-hosted, GPU recommended
+# pytesseract>=0.3.10           # also needs the tesseract binary + 'ben' model

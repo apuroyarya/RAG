@@ -15,17 +15,23 @@ Three layers of detection, cheapest first:
 
 Layers 1-2 run here. Layer 3 is the pipeline's normalize-stage gate.
 """
-import sys, re, unicodedata
-from os.path import basename
-from collections import Counter
+import sys
+from os.path import abspath, basename, dirname
+
 import pymupdf
 
-BENG = lambda c: 0x0980 <= ord(c) < 0x0A00
-VIRAMA = "\u09cd"
-# dependent vowel signs + signs that cannot open a cluster
-DEPENDENT = set("\u09be\u09bf\u09c0\u09c1\u09c2\u09c3\u09c4\u09c7\u09c8"
-                "\u09cb\u09cc\u09d7\u09bc") | {VIRAMA}
-LEGACY_FONT_HINT = re.compile(r"(MJ|SutonnyMJ|Bijoy|Boishakhi)\b", re.I)
+# Runs as `python -m tools.encoding_probe` or as a bare script path.
+try:
+    from .bengali import LEGACY_FONT_HINT, bengali_ratio, is_bengali, orthographic_report
+except ImportError:
+    sys.path.insert(0, dirname(dirname(abspath(__file__))))
+    from tools.bengali import (LEGACY_FONT_HINT, bengali_ratio, is_bengali,
+                               orthographic_report)
+
+if hasattr(sys.stdout, "reconfigure"):  # Bengali dies under cp1252 otherwise
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+BENG = is_bengali
 
 
 def font_structure(doc, pages):
@@ -45,36 +51,20 @@ def font_structure(doc, pages):
     return findings
 
 
-def orthographic(text):
-    """Layer 2: count sequences that are illegal or near-impossible in Bengali."""
-    tokens = [t for t in text.split() if any(BENG(c) for c in t)]
-    initial_dep = [t for t in tokens if t and t[0] in DEPENDENT]     # illegal
-    triples = re.findall(r"([\u0985-\u09b9])\1\1", text)             # 3x same letter
-    dep_after_space = re.findall(r"\s[\u09be-\u09cc\u09cd]", text)   # orphaned sign
-    return {
-        "tokens": len(tokens),
-        "token_initial_dependent_sign": len(initial_dep),
-        "samples": initial_dep[:8],
-        "triple_letter_runs": len(triples),
-        "orphaned_signs": len(dep_after_space),
-    }
-
-
 def probe(path, sample=6):
     doc = pymupdf.open(path)
     pages = list(range(min(sample, doc.page_count)))
     text = "\n".join(doc[i].get_text() for i in pages)
 
-    n_beng = sum(1 for c in text if BENG(c))
     n_vis = sum(1 for c in text if not c.isspace())
-    ratio = n_beng / max(n_vis, 1)
+    ratio = bengali_ratio(text)
 
     fonts = font_structure(doc, pages)
-    orth = orthographic(text)
+    orth = orthographic_report(text)  # layer 2, shared with the OCR bench
     empty_pages = sum(1 for i in pages if len(doc[i].get_text().strip()) < 20)
 
     bad_fonts = [f for f in fonts if f[3]]
-    illegal_rate = orth["token_initial_dependent_sign"] / max(orth["tokens"], 1)
+    illegal_rate = orth["initial_dependent_rate"]
 
     if bad_fonts or illegal_rate > 0.005 or orth["triple_letter_runs"]:
         verdict = "TEXT LAYER UNTRUSTWORTHY -> render + OCR"
@@ -94,8 +84,8 @@ def probe(path, sample=6):
     print(f"\n[2] orthographic:")
     for k, v in orth.items():
         print(f"    {k:32s} {v}")
-    print(f"    token_initial_dependent_sign rate  {illegal_rate:.2%}  (Bengali words cannot"
-          f" begin with a vowel sign -> any hit is corruption)")
+    print(f"    -> initial_dependent_rate {illegal_rate:.2%}: Bengali words cannot begin"
+          f" with a dependent vowel sign, so any hit is corruption")
     print(f"\nVERDICT: {verdict}")
     doc.close()
     return verdict
