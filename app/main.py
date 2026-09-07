@@ -14,7 +14,8 @@ from fastapi.responses import PlainTextResponse
 
 from . import db
 from .db import new_id, now_iso
-from .config import DEFAULT_LANGUAGE, OCR_ENGINE, STORAGE_DIR, document_dir
+from .config import (ABSTAIN_THRESHOLD, DEFAULT_LANGUAGE, EMBED_BACKEND,
+                     OCR_ENGINE, RERANK_BACKEND, STORAGE_DIR, document_dir)
 from .pipeline import runner, stages
 
 app = FastAPI(
@@ -38,6 +39,9 @@ def health():
         "stages_pending": [s for s in stages.STAGE_ORDER
                            if s not in stages.implemented()],
         "ocr_engine": OCR_ENGINE or None,
+        "embed_backend": EMBED_BACKEND,
+        "rerank_backend": RERANK_BACKEND,
+        "abstain_threshold": ABSTAIN_THRESHOLD,
         "storage": str(STORAGE_DIR),
     }
 
@@ -199,6 +203,35 @@ def artifact(document_id: str, stage: str):
     if not path.resolve().is_relative_to(STORAGE_DIR) or not path.exists():
         raise HTTPException(404, "artifact missing")
     return path.read_text(encoding="utf-8")
+
+
+@app.post("/ask")
+def ask(question: str = Query(..., min_length=1),
+        document_id: str = Query(None),
+        threshold: float = Query(None)):
+    """Answer from the corpus, or say there is not enough information.
+
+    The response carries full diagnostics - every candidate's scores, the
+    threshold applied, and the grounding overlap per citation - because an
+    abstention decision that cannot be audited cannot be tuned.
+    """
+    from .answering import answer as answer_question
+
+    try:
+        result = answer_question(question, document_id=document_id,
+                                 threshold=threshold)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+
+    return {
+        "question": result.question,
+        "answered": result.answered,
+        "answer": result.text,
+        "citations": result.citations,
+        "abstain_reason": result.abstain_reason,
+        "warnings": result.warnings,
+        "diagnostics": result.diagnostics,
+    }
 
 
 @app.get("/review")

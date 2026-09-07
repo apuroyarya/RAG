@@ -65,3 +65,47 @@ def stage_dir(document_id, stage):
     d = document_dir(document_id) / stage
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+# ---------------------------------------------------------------------------
+# Retrieval and abstention
+# ---------------------------------------------------------------------------
+
+#: Dense candidates pulled before reranking. Wider is better for recall since
+#: the reranker is what decides the final order.
+RETRIEVE_DENSE_K = int(os.environ.get("RETRIEVE_DENSE_K", "30"))
+
+#: Candidates kept after reranking.
+RETRIEVE_RERANK_K = int(os.environ.get("RETRIEVE_RERANK_K", "8"))
+
+#: Spans actually shown to the model. Fewer, better spans beat more, weaker
+#: ones - extra weak context is what invites a stretched answer.
+MAX_CONTEXT_SPANS = int(os.environ.get("MAX_CONTEXT_SPANS", "5"))
+
+#: Reranker: "cross_encoder" (real) or "passthrough" (plumbing only - gates on
+#: embedding cosine, which the design explicitly rejects as uncalibrated).
+RERANK_BACKEND = os.environ.get("RERANK_BACKEND", "cross_encoder")
+RERANK_MODEL = os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+
+#: THIS IS A PLACEHOLDER, NOT A CALIBRATED VALUE.
+#: The abstention gate compares the best cross-encoder score against this.
+#: bge-reranker-v2-m3 emits unbounded logits centred near zero, so 0.0 is
+#: roughly "the reranker is ambivalent". The real value must be measured on the
+#: eval set - 60 answerable questions with known gold spans and 40 deliberately
+#: unanswerable ones - by picking the cutoff that maximises correct abstention
+#: without losing answerable questions. Until then, treat every abstention
+#: decision as unvalidated.
+ABSTAIN_THRESHOLD = float(os.environ.get("ABSTAIN_THRESHOLD", "0.0"))
+
+#: Minimum share of a quote's tokens that must appear in the span it cites.
+#: Not a semantic check - it catches a fabricated or paraphrased quote, not a
+#: claim that misreads a real quote. Also a placeholder pending the eval set.
+GROUNDING_MIN_OVERLAP = float(os.environ.get("GROUNDING_MIN_OVERLAP", "0.6"))
+
+#: Returned verbatim whenever the system abstains. Phase 1 is Bengali.
+#: "I do not have enough information to answer this question."
+ABSTAIN_MESSAGE = os.environ.get(
+    "ABSTAIN_MESSAGE",
+    "এই প্রশ্নের উত্তর দেওয়ার জন্য আমার কাছে পর্যাপ্ত তথ্য নেই।")
+
+ANSWER_MODEL = os.environ.get("ANSWER_MODEL", "claude-opus-5")

@@ -23,8 +23,14 @@ answers). English and Hindi follow in phases 2 and 3.
 | `embed` | implemented — BGE-M3 self-hosted, or a fake backend for tests |
 | `index` | implemented — Qdrant embedded, dense vectors |
 
-All six ingestion stages are implemented. Retrieval, abstention and the query
-API are not built yet.
+All six ingestion stages are implemented, plus retrieval, the abstention
+subsystem, and a `/ask` endpoint.
+
+**The abstention threshold is not calibrated.** `ABSTAIN_THRESHOLD` in config is
+a placeholder. Setting it requires the eval set — 60 answerable Bengali
+questions with known gold spans and 40 deliberately unanswerable ones — and
+choosing the cutoff that maximises correct abstention without losing answerable
+questions. Until then every abstention decision is unvalidated.
 
 Every page of both sample documents needs OCR — their text layers are corrupt —
 so OCR quality sets the ceiling for the whole system. Tesseract is wired up as a
@@ -79,6 +85,7 @@ python scripts/smoke_ingest.py "path/to/some.pdf"
 python scripts/test_chunking.py        # chunker logic, no DB or OCR needed
 python scripts/test_embedding.py       # embedding layer, fake backend
 python scripts/test_vectorstore.py     # vector store, throwaway collection
+python scripts/test_answering.py       # abstention subsystem, stubbed model
 EMBED_BACKEND=sentence_transformers python scripts/test_embedding.py   # real model
 ```
 
@@ -150,3 +157,42 @@ python -m tools.encoding_probe "document.pdf"
 # which OCR engine should ingestion use?
 python -m tools.ocr_bench.run "document.pdf" --pages 2,3,5
 ```
+
+## Asking questions
+
+```bash
+python scripts/ask.py "দেবযজ্ঞ কখন করা হয়?"
+
+# collect threshold data without spending a token:
+python scripts/ask.py "..." --retrieval-only
+```
+
+`--retrieval-only` prints the rerank score for every candidate and no model call
+is made. Run your eval questions through it to see where answerable and
+unanswerable ones separate — that separation is what sets `ABSTAIN_THRESHOLD`.
+
+### How abstention works
+
+Three layers, from DESIGN.md:
+
+1. **A gate before generation.** If the best rerank score is below threshold, we
+   abstain without calling the model. A model that never sees weak context
+   cannot be tempted by it, and it costs nothing.
+2. **Structural citations.** The model receives numbered spans and must return,
+   per claim, which span supports it — as schema-validated JSON, so a malformed
+   citation is impossible rather than discouraged. A citation naming a span that
+   was not supplied invalidates the whole answer.
+3. **A groundedness check in the hot path.** Each quote is compared against its
+   cited span by token overlap. No second model call — the 5s budget does not
+   allow two serial LLM round trips.
+
+**What this does not do:** it does not make hallucination impossible. A model can
+still paraphrase a cited span into a claim the span does not support, and lexical
+overlap will not always catch that. What it does is make hallucination much less
+likely and every answer *checkable* — each claim carries the exact characters it
+came from. Measuring the remaining gap is what the eval set is for.
+
+The reranker matters here specifically because the gate reads its score. Raw
+embedding cosine is compressed into a narrow band that shifts with query
+phrasing, which is why `RERANK_BACKEND=passthrough` reports itself as *not*
+thresholdable and every answer produced under it carries a warning.
