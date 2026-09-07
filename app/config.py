@@ -24,6 +24,17 @@ OCR_DPI = int(os.environ.get("OCR_DPI", "300"))
 #: Phase 1 is monolingual Bengali. Phases 2 and 3 add English then Hindi.
 DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "bn")
 
+#: Chunk sizing, in CHARACTERS not tokens. Bengali tokenizes far heavier than
+#: English, so an English token default would be wrong - but the true ratio
+#: depends on the embedding model's tokenizer, which is not chosen yet.
+#: Defaults measured against the sample corpus: pages average ~1000 chars and
+#: hold several independent mantras, so ~400 gives 3-4 chunks per page. The
+#: retrieval-optimal value needs the eval set to determine.
+CHUNK_TARGET_CHARS = int(os.environ.get("CHUNK_TARGET_CHARS", "400"))
+CHUNK_MAX_CHARS = int(os.environ.get("CHUNK_MAX_CHARS", "700"))
+CHUNK_MIN_CHARS = int(os.environ.get("CHUNK_MIN_CHARS", "80"))
+CHUNK_OVERLAP_CHARS = int(os.environ.get("CHUNK_OVERLAP_CHARS", "60"))
+
 #: A page whose token-initial-dependent-sign rate exceeds this is corrupt.
 #: Bengali words cannot begin with a dependent vowel sign, so the honest
 #: threshold is 0 - this allows a hair of slack for stray artefacts.

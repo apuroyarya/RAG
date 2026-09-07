@@ -69,6 +69,40 @@ def orthographic_report(text):
     }
 
 
+#: Bengali full stop. Shares its codepoint with the Devanagari danda, so it is
+#: not a sign of Hindi text leaking in.
+DANDA = "।"
+
+#: A sentence ends at a run of dandas (verse text uses `।।`) followed by
+#: whitespace or end of text. Requiring the whitespace matters: this corpus
+#: writes scripture references as `[যর্তুঃ০অ০৩০।মং০৩।।]`, with dandas *inside*
+#: the token, and splitting there produces fragments like `| [যর্তুঃ০অ০১৩ ।`.
+_SENTENCE_END = re.compile(r"[।৤৥?!]+(?=\s|$)")
+
+_BRACKETS = {"[": "]", "(": ")", "‘": "’", "“": "”"}
+
+
+def sentence_ends(text):
+    """Offsets just past each sentence terminator, skipping bracketed spans.
+
+    Bracket tracking is what keeps a citation like `[যর্তুঃ০অ০৩০।মং০৩।।]` intact:
+    its internal dandas are inside `[...]`, so they are not split points even
+    though they are followed by whitespace.
+    """
+    closers = set(_BRACKETS.values())
+    depth_at = bytearray(len(text) + 1)
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch in _BRACKETS:
+            depth = min(depth + 1, 255)
+        elif ch in closers:
+            depth = max(0, depth - 1)
+        depth_at[i + 1] = depth
+
+    return [m.end() for m in _SENTENCE_END.finditer(text)
+            if depth_at[m.start()] == 0]
+
+
 _LATIN_WORD = re.compile(r"\b[A-Za-z]{2,}\b")
 
 

@@ -19,7 +19,7 @@ answers). English and Hindi follow in phases 2 and 3.
 | `extract` | implemented — per-page text-layer triage |
 | `ocr` | implemented — running Tesseract as a stopgap |
 | `normalize` | implemented — NFC + Bengali validity gate |
-| `chunk` | not implemented (blocked on real extracted text) |
+| `chunk` | implemented — paragraph-first, offsets preserved for citations |
 | `embed` | not implemented (blocked on BGE-M3 hosting decision) |
 | `index` | not implemented (blocked on hybrid-search decision) |
 
@@ -75,6 +75,7 @@ End-to-end check of the ingestion backbone:
 
 ```bash
 python scripts/smoke_ingest.py "path/to/some.pdf"
+python scripts/test_chunking.py        # chunker logic, no DB or OCR needed
 ```
 
 It asserts the things that are hard to be confident about by reading: stage

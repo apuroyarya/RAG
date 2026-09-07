@@ -157,11 +157,26 @@ def run_stage(document_id, stage, triggered_by="manual", force=False):
     return out
 
 
+#: How many times auto mode will retry a failing stage before giving up on it.
+#: Without a retry path a stage that failed once is stuck forever - a worker
+#: would skip that document silently even after the cause is fixed. Without a
+#: limit, a permanently-broken stage would be retried on every sweep.
+MAX_STAGE_ATTEMPTS = 3
+
+
+def is_runnable(row):
+    """Whether a stage row is eligible to be picked up, ignoring blockers."""
+    if row["status"] in ("pending", "stale"):
+        return True
+    # a failed stage stays retryable until it has burned its attempts; past that
+    # it needs a human, who can still force it explicitly
+    return row["status"] == "failed" and row["attempt"] < MAX_STAGE_ATTEMPTS
+
+
 def next_runnable(document_id):
     """The first stage that could run now, or None. Used by auto mode."""
     for row in stage_rows(document_id):
-        if row["status"] in ("pending", "stale") and not blockers(
-                document_id, row["stage"]):
+        if is_runnable(row) and not blockers(document_id, row["stage"]):
             return row["stage"]
     return None
 
