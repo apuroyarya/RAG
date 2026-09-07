@@ -1,0 +1,192 @@
+"""Stage execution and state transitions.
+
+This is the whole difference between manual and automatic mode. `run_stage` is
+called either by an admin clicking a button or by a worker claiming a pending
+row - the guard rules, artifact handling and status transitions are identical.
+
+The rule worth understanding is downstream invalidation. Re-running extract
+means every later stage's result describes input that no longer exists, so those
+rows go to 'stale' rather than staying 'succeeded'. Without this, a re-extracted
+document keeps an index built from the old text and nothing tells you.
+"""
+import traceback
+from datetime import datetime, timezone
+
+from psycopg.types.json import Jsonb
+
+from .. import db
+from . import stages
+
+
+def now():
+    return datetime.now(timezone.utc)
+
+
+def ensure_stage_runs(document_id):
+    """Give a document its full row-per-stage set, all pending."""
+    with db.connect() as conn:
+        for stage in stages.STAGE_ORDER:
+            conn.execute(
+                """
+                INSERT INTO stage_runs (document_id, stage, status)
+                VALUES (%s, %s, 'pending')
+                ON CONFLICT (document_id, stage) DO NOTHING
+                """,
+                (document_id, stage),
+            )
+        conn.commit()
+
+
+def stage_rows(document_id):
+    """All stage rows for a document, in execution order."""
+    rows = db.query(
+        "SELECT * FROM stage_runs WHERE document_id = %s", (document_id,))
+    by_name = {r["stage"]: r for r in rows}
+    return [by_name[s] for s in stages.STAGE_ORDER if s in by_name]
+
+
+def blockers(document_id, stage):
+    """Why `stage` cannot run right now. Empty list means it can.
+
+    A stage is runnable when every earlier stage has succeeded or been skipped.
+    'held' explicitly blocks: that is the review gate doing its job.
+    """
+    if stage not in stages.STAGE_ORDER:
+        return [f"unknown stage {stage!r}"]
+    rows = {r["stage"]: r for r in stage_rows(document_id)}
+    reasons = []
+    for earlier in stages.STAGE_ORDER[:stages.STAGE_ORDER.index(stage)]:
+        st = rows.get(earlier, {}).get("status")
+        if st in ("succeeded", "skipped"):
+            continue
+        if st == "held":
+            reasons.append(f"{earlier} is held for review")
+        else:
+            reasons.append(f"{earlier} is {st}")
+    return reasons
+
+
+def mark_downstream_stale(conn, document_id, stage):
+    """Anything after `stage` that had a result no longer describes the input."""
+    later = stages.STAGE_ORDER[stages.STAGE_ORDER.index(stage) + 1:]
+    if not later:
+        return 0
+    cur = conn.execute(
+        """
+        UPDATE stage_runs SET status = 'stale'
+        WHERE document_id = %s AND stage = ANY(%s)
+          AND status IN ('succeeded', 'failed', 'held', 'skipped')
+        """,
+        (document_id, later),
+    )
+    return cur.rowcount
+
+
+def run_stage(document_id, stage, triggered_by="manual", force=False):
+    """Execute one stage. Returns the updated stage row as a dict.
+
+    force=True re-runs a stage that already succeeded, which is the point of
+    having per-stage triggers at all - you fix the extract logic and re-run
+    extract on one document without re-uploading it.
+    """
+    doc = db.query("SELECT * FROM documents WHERE id = %s", (document_id,), one=True)
+    if not doc:
+        raise LookupError(f"no document {document_id}")
+
+    ensure_stage_runs(document_id)
+    row = db.query(
+        "SELECT * FROM stage_runs WHERE document_id = %s AND stage = %s",
+        (document_id, stage), one=True)
+    if not row:
+        raise LookupError(f"no stage {stage!r} for document {document_id}")
+
+    if row["status"] == "running":
+        raise RuntimeError(f"{stage} is already running for this document")
+    if row["status"] == "succeeded" and not force:
+        raise RuntimeError(
+            f"{stage} already succeeded; pass force=true to re-run it")
+
+    reasons = blockers(document_id, stage)
+    if reasons:
+        raise RuntimeError(f"cannot run {stage}: " + "; ".join(reasons))
+
+    impl = stages.get(stage)  # raises with a clear message if not implemented
+
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE stage_runs
+               SET status = 'running', attempt = attempt + 1,
+                   triggered_by = %s, started_at = %s,
+                   finished_at = NULL, error = NULL
+             WHERE document_id = %s AND stage = %s
+            """,
+            (triggered_by, now(), document_id, stage),
+        )
+        conn.commit()
+
+    try:
+        result = impl.run(doc)
+    except Exception:
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE stage_runs
+                   SET status = 'failed', finished_at = %s, error = %s
+                 WHERE document_id = %s AND stage = %s
+                """,
+                (now(), traceback.format_exc(limit=8), document_id, stage),
+            )
+            conn.commit()
+        raise
+
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE stage_runs
+               SET status = %s, finished_at = %s, output_ref = %s,
+                   metrics = %s, error = NULL
+             WHERE document_id = %s AND stage = %s
+            """,
+            (result.status, now(), result.output_ref, Jsonb(result.metrics),
+             document_id, stage),
+        )
+        stale = mark_downstream_stale(conn, document_id, stage)
+        conn.commit()
+
+    out = db.query(
+        "SELECT * FROM stage_runs WHERE document_id = %s AND stage = %s",
+        (document_id, stage), one=True)
+    out["downstream_marked_stale"] = stale
+    out["note"] = result.note
+    return out
+
+
+def next_runnable(document_id):
+    """The first stage that could run now, or None. Used by auto mode."""
+    for row in stage_rows(document_id):
+        if row["status"] in ("pending", "stale") and not blockers(
+                document_id, row["stage"]):
+            return row["stage"]
+    return None
+
+
+def advance(document_id, triggered_by="auto", max_stages=None):
+    """Run stages until something blocks. This IS auto mode.
+
+    Phase 1 drives stages by hand, so nothing calls this yet - but it exists to
+    prove the manual path did not paint us into a corner. A background worker
+    would loop over documents calling this instead of an admin clicking.
+    """
+    ran = []
+    while True:
+        stage = next_runnable(document_id)
+        if stage is None or stage not in stages.implemented():
+            break
+        if max_stages is not None and len(ran) >= max_stages:
+            break
+        row = run_stage(document_id, stage, triggered_by=triggered_by, force=True)
+        ran.append({"stage": stage, "status": row["status"]})
+        if row["status"] in ("held", "failed"):
+            break
+    return ran

@@ -6,3 +6,6 @@ __pycache__/
 # benchmark renders, OCR output and transcriptions are local working data
 tools/ocr_bench/_out/
 tools/_*.png
+
+storage/
+.env
