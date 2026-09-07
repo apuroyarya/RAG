@@ -9,6 +9,8 @@ Phase 1 is monolingual Bengali (Bengali documents, Bengali questions, Bengali
 answers). English and Hindi follow in phases 2 and 3.
 
 - [DESIGN.md](DESIGN.md) — architecture and the reasoning behind it
+- [docs/setup-ubuntu.md](docs/setup-ubuntu.md) — setup on Linux with Docker,
+  and the one component that has never been exercised
 - [docs/extraction-findings.md](docs/extraction-findings.md) — why OCR is on the
   critical path even though the PDFs contain digital text
 
@@ -59,7 +61,9 @@ Then set `OCR_ENGINE=tesseract` and the `ocr` stage will run.
 
 ## Running it
 
-Local development needs no database server - it runs on SQLite out of the box.
+Local development needs no database server — it runs on SQLite out of the box.
+On Linux with Docker, see [docs/setup-ubuntu.md](docs/setup-ubuntu.md) for the
+Postgres + Qdrant-server path.
 
 ```bash
 python -m venv .venv
