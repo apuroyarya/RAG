@@ -12,6 +12,7 @@ controlled comparison.
 """
 import os
 import time
+from pathlib import Path
 
 
 class Engine:
@@ -163,31 +164,86 @@ class Surya(Engine):
         return "\n".join(lines)
 
 
-class Tesseract(Engine):
-    """Tesseract with the Bengali model — the pessimistic baseline.
+#: Where the installers put the binary, tried when TESSERACT_CMD is unset.
+#: Forward slashes deliberately - they work on Windows and survive escaping.
+_TESSERACT_CANDIDATES = (
+    "C:/Program Files/Tesseract-OCR/tesseract.exe",
+    "C:/Program Files (x86)/Tesseract-OCR/tesseract.exe",
+    "/usr/bin/tesseract",
+    "/usr/local/bin/tesseract",
+    "/opt/homebrew/bin/tesseract",
+)
 
-    Included to quantify how much the paid engines actually buy you. Expect it
-    to struggle badly on conjuncts; if it does not, you can save real money.
-    Needs the `ben` traineddata installed alongside the binary.
+#: Language packs live here when TESSDATA_PREFIX is unset. Keeping them beside
+#: the project avoids needing admin rights to write into Program Files - but
+#: note TESSDATA_PREFIX *replaces* the default directory rather than adding to
+#: it, so eng and osd have to be copied in alongside ben.
+_LOCAL_TESSDATA = Path(__file__).resolve().parents[2] / ".tessdata"
+
+
+class Tesseract(Engine):
+    """Tesseract with the Bengali model - self-hosted, free, and the stopgap.
+
+    Measured on the sample corpus it is far better than the broken text layer
+    (it reads `অথেশ্বরস্তুতিপ্রার্থনোপাসনা মন্ত্রাঃ` correctly where the text layer
+    gave `অথথশ্বরস্তুনিপ্রাথথথিাপাসিা মন্ত্ািঃ`), but it substitutes Latin words
+    where it fails on Bengali - `ও৩ম্` becomes "Boy", `জাতঃ` becomes "ates".
+    Those errors are structurally valid text, so they pass the orthographic
+    gate; `latin_intrusion` in app/bengali.py is the signal that catches them.
+
+    Good enough to get real text flowing through the pipeline. Not the final
+    answer - benchmark the paid engines before committing.
+
+    Configuration, both optional:
+      TESSERACT_CMD    - path to tesseract.exe when it is not on PATH
+      TESSDATA_PREFIX  - directory holding ben.traineddata, so the language pack
+                         can live beside the project rather than in Program Files
     """
     name = "tesseract"
     pricing_note = "free, self-hosted"
 
+    def _configure(self):
+        """Point pytesseract at the binary and the language packs.
+
+        Both are discovered rather than required, so `tesseract` works out of
+        the box after a normal install plus a ben.traineddata in .tessdata/.
+        """
+        import pytesseract
+
+        cmd = os.environ.get("TESSERACT_CMD")
+        if not cmd:
+            cmd = next((c for c in _TESSERACT_CANDIDATES if os.path.exists(c)), None)
+        if cmd:
+            pytesseract.pytesseract.tesseract_cmd = cmd
+
+        # tesseract reads this from the environment, so set it for the child
+        # process rather than passing it per call
+        if not os.environ.get("TESSDATA_PREFIX") and _LOCAL_TESSDATA.is_dir():
+            os.environ["TESSDATA_PREFIX"] = str(_LOCAL_TESSDATA)
+
+        return pytesseract
+
     def available(self):
         try:
-            import pytesseract
+            pytesseract = self._configure()
         except ImportError:
             return False, "pip install pytesseract (and install the tesseract binary)"
         try:
             langs = pytesseract.get_languages(config="")
         except Exception as exc:
-            return False, f"tesseract binary not found: {exc}"
+            return False, (f"tesseract binary not found ({exc}); "
+                           f"set TESSERACT_CMD to tesseract.exe")
         if "ben" not in langs:
-            return False, "tesseract found but the 'ben' language pack is missing"
+            return False, (
+                "tesseract found but the 'ben' language pack is missing. Put "
+                "ben.traineddata from tesseract-ocr/tessdata_best in a directory "
+                "and point TESSDATA_PREFIX at it - copy eng/osd traineddata there "
+                "too, since TESSDATA_PREFIX replaces the default directory."
+            )
         return True, "ok"
 
     def ocr(self, png_path):
-        import pytesseract
+        pytesseract = self._configure()
         from PIL import Image
         return pytesseract.image_to_string(Image.open(png_path), lang="ben")
 

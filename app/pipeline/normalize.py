@@ -16,10 +16,15 @@ import json
 
 from .. import db
 from ..db import now_iso
+from ..bengali import latin_intrusion
 from ..bengali import normalize as nfc_normalize
 from ..bengali import orthographic_report
 from ..config import VALIDITY_THRESHOLD, stage_dir
 from .stages import Stage, StageResult, register
+
+#: Above this share of Latin word tokens, a Bengali page is flagged as likely
+#: OCR mis-recognition. A warning, not a gate - the page still indexes.
+LATIN_WARN_RATE = 0.10
 
 
 @register
@@ -46,7 +51,7 @@ class Normalize(Stage):
                 f"{len(missing)} page(s) still have no text (pages {missing[:5]}); "
                 f"run the ocr stage first")
 
-        report, bad_pages = [], []
+        report, bad_pages, suspect_pages = [], [], []
         with db.connect() as conn:
             for p in pages:
                 text = nfc_normalize(p["raw_text"] or "", collapse_whitespace=False)
@@ -63,6 +68,7 @@ class Normalize(Stage):
                     """,
                     (text, int(trustworthy), now_iso(), doc["id"], p["page_no"]),
                 )
+                latin = latin_intrusion(text)
                 entry = {
                     "page_no": p["page_no"],
                     "source": p["source"],
@@ -70,10 +76,17 @@ class Normalize(Stage):
                     "trustworthy": trustworthy,
                     "initial_dependent_rate": round(orth["initial_dependent_rate"], 4),
                     "samples": orth["initial_dependent_samples"],
+                    # reported, not gated on: scattered Latin words in Bengali
+                    # prose usually mean OCR mis-recognition, but a Bengali
+                    # document may legitimately quote English
+                    "latin_rate": round(latin["latin_rate"], 4),
+                    "latin_samples": latin["samples"],
                 }
                 report.append(entry)
                 if not trustworthy:
                     bad_pages.append(p["page_no"])
+                elif latin["latin_rate"] > LATIN_WARN_RATE:
+                    suspect_pages.append(p["page_no"])
             conn.commit()
 
         artifact = stage_dir(doc["id"], "normalize") / "validity.json"
@@ -81,6 +94,10 @@ class Normalize(Stage):
                             encoding="utf-8")
 
         note = f"{len(pages) - len(bad_pages)}/{len(pages)} pages passed validity"
+        if suspect_pages and not bad_pages:
+            note += (f"; {len(suspect_pages)} page(s) have heavy Latin intrusion "
+                     f"(pages {suspect_pages[:5]}) - likely OCR mis-recognition, "
+                     f"indexed anyway")
         if bad_pages:
             note = (f"{len(bad_pages)} page(s) failed the Bengali validity check "
                     f"(pages {bad_pages[:8]}) - held for review")
@@ -107,6 +124,8 @@ class Normalize(Stage):
                 "pages_trustworthy": len(pages) - len(bad_pages),
                 "pages_failed": len(bad_pages),
                 "failed_page_numbers": bad_pages[:50],
+                "pages_latin_suspect": len(suspect_pages),
+                "latin_suspect_page_numbers": suspect_pages[:50],
                 "total_chars": sum(e["chars"] for e in report),
             },
             note=note,

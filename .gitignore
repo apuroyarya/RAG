@@ -13,3 +13,5 @@ storage/
 rag.db
 rag.db-wal
 rag.db-shm
+
+.tessdata/

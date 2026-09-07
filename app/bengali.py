@@ -69,7 +69,39 @@ def orthographic_report(text):
     }
 
 
+_LATIN_WORD = re.compile(r"\b[A-Za-z]{2,}\b")
+
+
+def latin_intrusion(text):
+    """Share of word-like tokens that are Latin, on a page that is mostly Bengali.
+
+    Catches a failure the orthographic check cannot: OCR that mis-recognises
+    Bengali as Latin. Tesseract's Bengali model does this - it renders `ও৩ম্` as
+    "Boy" and `জাতঃ` as "ates". Those are structurally valid text, so
+    `initial_dependent_rate` stays at 0% while the content is wrong.
+
+    Not a hard gate, because Bengali documents legitimately contain English.
+    A high rate on a page with high `bengali_ratio` is the suspicious shape:
+    scattered Latin words inside Bengali prose rather than an English passage.
+    """
+    latin = _LATIN_WORD.findall(text)
+    bengali_tokens = [t for t in text.split() if any(is_bengali(c) for c in t)]
+    total = len(latin) + len(bengali_tokens)
+    if not total:
+        return {"latin_words": 0, "latin_rate": 0.0, "samples": []}
+    return {
+        "latin_words": len(latin),
+        "latin_rate": len(latin) / total,
+        "samples": latin[:8],
+    }
+
+
 def looks_corrupt(text, threshold=0.005):
-    """Ground-truth-free verdict. True means do not index this text."""
+    """Ground-truth-free verdict. True means do not index this text.
+
+    Only covers structural corruption. Latin intrusion is reported separately
+    rather than gated on, since it cannot be distinguished from legitimate
+    English content without knowing what the page should say.
+    """
     r = orthographic_report(text)
     return r["initial_dependent_rate"] > threshold or r["triple_letter_runs"] > 0

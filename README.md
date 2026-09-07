@@ -17,7 +17,7 @@ answers). English and Hindi follow in phases 2 and 3.
 | Stage | Status |
 |---|---|
 | `extract` | implemented — per-page text-layer triage |
-| `ocr` | implemented — engine pluggable, **engine not yet chosen** |
+| `ocr` | implemented — running Tesseract as a stopgap |
 | `normalize` | implemented — NFC + Bengali validity gate |
 | `chunk` | not implemented (blocked on real extracted text) |
 | `embed` | not implemented (blocked on BGE-M3 hosting decision) |
@@ -25,8 +25,30 @@ answers). English and Hindi follow in phases 2 and 3.
 
 Retrieval, abstention and the query API are not built yet.
 
-The open decision blocking the rest is **which OCR engine** — see
+Every page of both sample documents needs OCR — their text layers are corrupt —
+so OCR quality sets the ceiling for the whole system. Tesseract is wired up as a
+stopgap to get real text flowing; **it is not the final answer**. It reads most
+Bengali correctly but substitutes Latin words where it fails (`ও৩ম্` becomes
+"Boy", `জাতঃ` becomes "ates"), and flagged 6 of 8 pages on the first sample.
+Benchmark the paid engines before committing: see
 [tools/ocr_bench/README.md](tools/ocr_bench/README.md).
+
+### OCR setup (Tesseract stopgap)
+
+```bash
+winget install UB-Mannheim.TesseractOCR      # or apt install tesseract-ocr
+mkdir .tessdata
+curl -sSL -o .tessdata/ben.traineddata   https://github.com/tesseract-ocr/tessdata_best/raw/main/ben.traineddata
+cp "/c/Program Files/Tesseract-OCR/tessdata/"{eng,osd}.traineddata .tessdata/
+```
+
+`.tessdata/` beside the project avoids needing admin rights to write into
+Program Files. Note `TESSDATA_PREFIX` *replaces* the default directory rather
+than adding to it, which is why `eng` and `osd` get copied in alongside `ben`.
+The adapter finds both the binary and `.tessdata/` automatically; set
+`TESSERACT_CMD` or `TESSDATA_PREFIX` only to override.
+
+Then set `OCR_ENGINE=tesseract` and the `ocr` stage will run.
 
 ## Running it
 
